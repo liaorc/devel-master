@@ -1,0 +1,2813 @@
+<article class="manual_1" id="tutrial">
+<h1>
+  <span lang="en">User Tutrial</span>
+  <span lang="ja">チュートリアル</span>
+</h1>
+
+<section class="manual_2" id="tutrial-basic-operations">
+<h2 id="basic-operations">
+  <span lang="en">Basic Operations</span>
+  <span lang="ja">基本的な操作</span>
+</h2>
+
+<section class="manual_3" id="tutrial-pgstrom_enabled">
+<h3>
+<span lang="en">Turn On/Off PG-Strom</span>
+<span lang="ja">PG-Stromの有効化/無効化</span>
+</h3>
+<p>
+<span lang="en">
+You can turn on/off <tt>PG-Strom</tt> functionality using <tt>pg_strom.enabled</tt> configuration parameter.
+</span>
+<span lang="ja">
+<tt>pg_strom.enabled</tt>パラメータを使用して<tt>PG-Strom</tt>機能の有効/無効を切替える事ができます。
+</span>
+</p>
+<pre>
+# SET pg_strom.enabled = off;
+</pre>
+
+<p>
+<span lang="en">
+The above is the command to turn off the <tt>PG-Strom</tt>, and, the below is the command to turn on <tt>PG-Strom</tt> again.
+</span>
+<span lang="ja">
+上記が<tt>PG-Strom</tt>を無効化するコマンド、そして、下記が<tt>PG-Strom</tt>を再び有効化するコマンドです。
+</span>
+</p>
+
+<pre>
+# SET pg_strom.enabled = on;
+</pre>
+
+<p>
+<span lang="en">
+You can turn off <tt>PG-Strom</tt> on troubles, then confirm whether the problem is reproducible with no <tt>PG-Strom</tt> support.
+</span>
+<span lang="ja">
+トラブル時にはこれらのコマンドを用いて<tt>PG-Strom</tt>を無効化し、その状態でも問題が再現可能かどうかを確認する事ができます。
+</span>
+</p>
+
+<div class="hint">
+<p>
+<span lang="en">
+The command below allows to turn on/off <tt>PG-Strom</tt> from out of the session.
+It is convenient to have performance benchmark according to existence of <tt>PG-Strom</tt>, if application construct and send queries to <tt>PostgreSQL</tt> directly.
+</span>
+<span lang="ja">
+以下のコマンドを用いることで、セッションの外部から<tt>PG-Strom</tt>の有効・無効を切り替えることができます。これは、アプリケーションが直接<tt>PostgreSQL</tt>にクエリを発行するような状況で、<tt>PG-Strom</tt>の有無に伴う性能差をベンチマークするケースなどで有用です。
+</span>
+</p>
+<pre>
+# ALTER SYSTEM SET pg_strom.enabled TO off;
+# SELECT pg_reload_conf();
+</pre>
+</div>
+</section>
+
+<section class="manual_3" id="tutrial-operation-checks">
+<h3>
+<span lang="en">Operation Checks of PG-Strom</span>
+<span lang="ja">PG-Stromの動作確認</span>
+</h3>
+
+<p>
+<span lang="en">
+EXPLAIN command displays the query execution plan. Once PG-Strom gets a role to execute a part of the given query workloads, it shall be shown as <tt>CustomScan</tt> node; implemented by <tt>PG-Strom</tt>.
+</span>
+<span lang="ja">
+EXPLAINコマンドを用いてクエリ実行計画を表示することができます。<tt>PG-Strom</tt>がクエリ処理の一部を実行することになると、その部分は<tt>PG-Strom</tt>によって実装された<tt>CustomScan</tt>ノードとして表示されます。
+</span>
+</p>
+
+<pre>
+postgres=# EXPLAIN
+           SELECT cat, avg(ax) FROM t0 NATURAL JOIN t1 NATURAL JOIN t2 GROUP BY cat;
+                                    QUERY PLAN
+-----------------------------------------------------------------------------------
+ HashAggregate  (cost=2347813.66..2347813.98 rows=26 width=12)
+   Group Key: t0.cat
+   ->  Custom Scan (GpuPreAgg)  (cost=14189.15..1878462.46 rows=234 width=44)
+         Bulkload: On (density: 99.33%)
+         Reduction: Local + Global
+         ->  Custom Scan (GpuJoin)  (cost=10189.15..1851180.43 rows=99326645 width=12)
+               Bulkload: On (density: 100.00%)
+               Depth 1: GpuHashJoin, HashKeys: (bid), JoinQual: (bid = bid)
+                        Nrows (in/out: 99.33%), KDS-Hash (size: 12.04MB, nbatches: 1)
+               Depth 2: GpuHashJoin, HashKeys: (aid), JoinQual: (aid = aid)
+                        Nrows (in/out: 100.00%), KDS-Hash (size: 12.04MB, nbatches: 1)
+               ->  Custom Scan (BulkScan) on t0  (cost=0.00..1833334.80 rows=100000080 width=12)
+               ->  Seq Scan on t2  (cost=0.00..1935.00 rows=100000 width=4)
+               ->  Seq Scan on t1  (cost=0.00..1935.00 rows=100000 width=12)
+(14 rows)
+</pre>
+
+<p>
+<span lang="en">
+In the above example, we can see GpuJoin and GpuPreAgg to process relation's join and partial aggregation, by PG-Strom.
+On the other hands, once we turned off <tt>PG-Strom</tt>, then same query generate different query execution plan.
+</span>
+<span lang="ja">
+上記の例では、PG-Stromの提供するGpuJoinとGpuPreAggがそれぞれジョインと部分集約演算を実行します。 一方、いったんPG-Stromを無効化すると、同一のクエリが異なった実行計画を生成します。
+</span>
+</p>
+
+<pre>
+postgres=# SET pg_strom.enabled = off;
+SET
+postgres=# EXPLAIN
+           SELECT cat, avg(ax) FROM t0 NATURAL JOIN t1 NATURAL JOIN t2 GROUP BY cat;
+                                    QUERY PLAN
+-----------------------------------------------------------------------------------
+ HashAggregate  (cost=6824660.14..6824660.47 rows=26 width=12)
+   Group Key: t0.cat
+   ->  Hash Join  (cost=7250.00..6328026.92 rows=99326645 width=12)
+         Hash Cond: (t0.aid = t1.aid)
+         ->  Hash Join  (cost=3576.00..4182132.55 rows=99326645 width=8)
+               Hash Cond: (t0.bid = t2.bid)
+               ->  Seq Scan on t0  (cost=0.00..1833334.80 rows=100000080 width=12)
+               ->  Hash  (cost=1935.00..1935.00 rows=100000 width=4)
+                     ->  Seq Scan on t2  (cost=0.00..1935.00 rows=100000 width=4)
+         ->  Hash  (cost=1935.00..1935.00 rows=100000 width=12)
+               ->  Seq Scan on t1  (cost=0.00..1935.00 rows=100000 width=12)
+(11 rows)
+</pre>
+<p>
+<span lang="en">
+Here is no CustomScan node, thus PG-Strom is not responsible to execution of the query.
+</span>
+<span lang="ja">
+CustomScanが出現していません、したがって、PG-Stromはこのクエリの実行に関与しません。
+</span>
+</p>
+</section>
+</section>
+
+<section class="manual_2" id="tutrial-trouble-shooting">
+<h2>
+<span lang="en">Trouble Shooting</span>
+<span lang="ja">トラブルシューティング</span>
+</h2>
+<p>
+<span lang="en">
+
+</span>
+<span lang="ja">
+PG-Stromの運用においてトラブルが発生した場合、まず、それがPG-Stromに起因するものであるのかどうかを切り分けます。
+%%%PGSTROM_MANUAL_XLINK:tutrial-pgstrom_enabled%%%を参照し、PG-Stromを無効化した状態でトラブルを引き起こしたクエリを実行し、問題が再現するかどうかを確認してください。
+</span>
+<pre>
+SET pg_strom.enabled = off;
+</pre>
+</p>
+
+<p>
+<span lang="en">
+By the performance monitor of PG-Strom, you can gather more detailed run-time information regarding to the query execution performance.
+Set <code>On</code> to the <code>pg_strom.perfmon</code> parameter, and then run the target query using <code>EXPLAIN ANALYZE</code> command.
+</span>
+<span lang="ja">
+PG-Stromのパフォーマンスモニタを用いる事で、クエリ実行性能に関するより詳細な情報を採取する事ができます。
+パフォーマンスモニタを使用するには<code>pg_strom.perfmon</code>パラメータに<code>On</code>を設定し、<code>EXPLAIN ANALYZE</code>コマンドを用いて対象となるクエリを実行します。
+</span>
+
+<span lang="en">
+If performance monitor is enabled, <code>EXPLAIN ANALYZE</code> shows number of GPU kernel invocation and time consumption, amount of data transfer over the PCI-E bus using DMA, its performance and etc, in addition to the usual items.
+</span>
+<span lang="ja">
+パフォーマンスモニタが有効である状態でクエリを実行すると、<code>EXPLAIN ANALYZE</code>による通常の表示内容に加えて、GPUで実行された各関数の処理時間や呼び出し回数、PCI-Eバスを介してDMA転送されたデータサイズや転送性能などが表示されます。
+</span>
+
+<pre>
+postgres=# SET <em>pg_strom.perfmon</em> = on;
+SET
+postgres=# EXPLAIN ANALYZE
+           SELECT cat,count(*),avg(ax) FROM t0 NATURAL JOIN t1 NATURAL JOIN t2 GROUP BY cat;
+                                               QUERY PLAN
+-----------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=3573290.38..3573290.71 rows=26 width=12)
+                (actual time=14310.290..14310.297 rows=26 loops=1)
+   Group Key: t0.cat
+   ->  Custom Scan (GpuPreAgg)  (cost=16325.67..2871839.94 rows=234 width=48)
+                                (actual time=4992.761..14309.959 rows=936 loops=1)
+         Reduction: Local + Global
+         GPU Projection: cat, ax
+         Number of tasks: 468
+         gpupreagg_main(): total: 980.31ms, avg: 2.09ms, count: 468
+          - gpupreagg_preparation(): total: 277.16ms, avg: 0.59ms, count: 468
+          - gpupreagg_local_reduction(): total: 485.22ms, avg: 1.04ms, count: 468
+          - gpupreagg_global_reduction(): total: 121.51ms, avg: 0.26ms, count: 468
+          - gpupreagg_final_reduction(): total: 65.05ms, avg: 0.14ms, count: 468
+          - gpupreagg_fixup_varlena(): total: 0.09ms, avg: 0.02ms, count: 4
+         Time of load: 13.66sec
+         Time of materialize: 0.09ms
+         DMA send: 10.95GB/sec, len: 7254.57MB, time: 647.23ms, count: 1404
+         DMA recv: 997.03MB/sec, len: 31.04MB, time: 31.13ms, count: 472
+         ->  Custom Scan (GpuJoin) on t0  (cost=12325.67..2837165.74 rows=98149953 width=12)
+                                          (actual time=131.377..13659.267 rows=100000000 loops=1)
+               GPU Projection: t0.cat, t1.ax
+               Outer Scan: t0 (actual time=9.097..4571.012 rows=100000000 loops=1)
+               Depth 1: GpuHashJoin, HashKeys: (t0.bid)
+                        JoinQuals: (t0.bid = t2.bid)
+                        Nrows (in:100000000 out:100000000, 100.00% planned 98.15%)
+                        KDS-Hash (size: 9.16MB planned 13.47MB, nbatches: 1 planned 1)
+               Depth 2: GpuHashJoin, HashKeys: (t0.aid)
+                        JoinQuals: (t0.aid = t1.aid)
+                        Nrows (in:100000000 out:100000000, 100.00% planned 100.00%)
+                        KDS-Hash (size: 9.16MB planned 13.47MB, nbatches: 1 planned 1)
+               Inner Buffer: (13.47MB)x(13.47MB), DMA nums: 167, size: 4499.40MB
+               Number of tasks: 499
+               gpujoin_main(): total: 2512.94ms, avg: 5.04ms, count: 499
+                - gpujoin_exec_outerscan: total: 58.02ms, avg: 0.12ms, count: 499
+                - gpujoin_exec_hashjoin: total: 1796.94ms, avg: 1.80ms, count: 998
+                - gpujoin_projection: total: 634.04ms, avg: 1.27ms, count: 499
+               Time of inner load: 76.87ms
+               Time of outer load: 9.14sec
+               Time of materialize: 3991.05ms
+               DMA send: 10.86GB/sec, len: 7734.65MB, time: 695.38ms, count: 1497
+               DMA recv: 11.80GB/sec, len: 7145.93MB, time: 591.62ms, count: 998
+               ->  Seq Scan on t2  (cost=0.00..1935.00 rows=100000 width=4)
+                                   (actual time=0.013..14.324 rows=100000 loops=1)
+               ->  Seq Scan on t1  (cost=0.00..1935.00 rows=100000 width=12)
+                                   (actual time=0.006..14.078 rows=100000 loops=1)
+ Planning time: 0.887 ms
+ Execution time: 14743.778 ms
+(42 rows)
+</pre>
+
+</p>
+
+
+<section class="manual_3" id="tutrial-write-a-bug-report">
+<h3>
+<span lang="en">Write a Bug Report</span>
+<span lang="ja">バグレポートの書き方</span>
+</h3>
+<p>
+<span lang="en">Coming Soon...</span>
+<span lang="ja">あとで書く</span>
+</p>
+</section>
+</section>
+
+<section class="manual_2" id="reference_types">
+<h2>
+  <span lang="en">Reference:Data Types</span>
+  <span lang="ja">リファレンス：データ型</span>
+</h2>
+<p>
+<span lang="en">
+PG-Strom supports the data types below.
+</span>
+<span lang="ja">
+PG-Stromは以下のデータ型に対応しています。
+</span>
+</p>
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Built-in Data Types</span>
+<span lang="ja">組み込みのデータ型</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 12em;">
+<span lang="en">SQL Data Type</span>
+<span lang="ja">SQL データ型</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Internal Form</span>
+<span lang="ja">内部データ表現</span>
+</th>
+<th class="manual" style="width: 6em;">
+<span lang="en">Length</span>
+<span lang="ja">データ長</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody class="manual">
+<tr>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"><code>cl_bool</code></td>
+<td class="manual">1 byte</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"><code>cl_short</code></td>
+<td class="manual">2 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer</code></td>
+<td class="manual"><code>cl_int</code></td>
+<td class="manual">4 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"><code>cl_long</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real</code></td>
+<td class="manual"><code>cl_float</code></td>
+<td class="manual">4 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float</code></td>
+<td class="manual"><code>cl_double</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"><code>cl_ulong</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual">
+<span lang="en">
+It maps variable length numeric data on 64bit fixed length datum. Up to 18 digits are available, but may take CPU fallback if overflow.
+</span>
+<span lang="ja">
+可変長のnumericデータを64bit固定長データに割り当てて使用。最大18桁まで表現可能だが、桁あふれを起こすとCPU側でフォールバック処理を行う。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>money</code></td>
+<td class="manual"><code>cl_long</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date</code></td>
+<td class="manual"><code>DateADT</code></td>
+<td class="manual">4 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time</code></td>
+<td class="manual"><code>TimeADT</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time with timezone</code></td>
+<td class="manual"><code>TimeTzADT</code></td>
+<td class="manual">12 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp</code></td>
+<td class="manual"><code>Timestamp</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone</code></td>
+<td class="manual"><code>TimestampTz</code></td>
+<td class="manual">8 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>interval</code></td>
+<td class="manual"><code>Interval</code></td>
+<td class="manual">16 bytes</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>char(n)</code></td>
+<td class="manual"><code>varlena *</code></td>
+<td class="manual">
+<span lang="en">variable length</span>
+<span lang="ja">可変長</span>
+</td>
+<td class="manual">
+<span lang="en">GPU cannot process compressed or TOAST'ed data.</span>
+<span lang="ja">圧縮、またはTOAST済みデータをGPUで扱う事はできません。</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>varchar(n)</code></td>
+<td class="manual"><code>varlena *</code></td>
+<td class="manual">
+<span lang="en">variable length</span>
+<span lang="ja">可変長</span>
+</td>
+<td class="manual">
+<span lang="en">GPU cannot process compressed or TOAST'ed data.</span>
+<span lang="ja">圧縮、またはTOAST済みデータをGPUで扱う事はできません。</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>text</code></td>
+<td class="manual"><code>varlena *</code></td>
+<td class="manual">
+<span lang="en">variable length</span>
+<span lang="ja">可変長</span>
+</td>
+<td class="manual">
+<span lang="en">GPU cannot process compressed or TOAST'ed data.</span>
+<span lang="ja">圧縮、またはTOAST済みデータをGPUで扱う事はできません。</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bytea</code></td>
+<td class="manual"><code>varlena *</code></td>
+<td class="manual">
+<span lang="en">variable length</span>
+<span lang="ja">可変長</span>
+</td>
+<td class="manual">
+<span lang="en">GPU cannot process compressed or TOAST'ed data.</span>
+<span lang="ja">圧縮、またはTOAST済みデータをGPUで扱う事はできません。</span>
+</td>
+</tr>
+</tbody>
+</table>
+
+<div class="hint">
+<p>
+<span lang="en">
+GPU cannot evaluate an expression that includes reference to variable length datum, if this datum is compressed or stored in external TOAST table.
+As a second best, PG-Strom evaluates same expression by CPU, however, it leads performance degradation because it consumes CPU cycles in addition to GPU cycles.
+</span>
+<span lang="ja">
+GPUが可変長データの参照を含む式の評価を行うとき、当該データが圧縮済み、またはTOASTテーブルに外部格納されているとこれを実行できません。
+次善策として、PG-StromはCPUで同じ式を評価しますが、いったんGPUでの処理を行った上にCPUで再評価を行うために性能劣化の原因となります。
+</span>
+</p>
+
+<p>
+<span lang="en">
+<code>ALTER TABLE ... SET STORAGE</code> command configures the storage mode of columns. It allows avoiding the problem, if you can know which column is referenced by GPU preliminary.
+The storage mode <tt>PLAIN</tt> prohibits compression or external TOAST save, so it allows to reference the variable length field always, however, it may lead an error when you try to save a large record bigger than the page size (it is usually 8KB).
+The storage mode <tt>MAIN</tt> does not prohibit compression or external TOAST save entirely, however, it tries to compress or write out the variable length data only when it has no other way to store the record.
+</span>
+<span lang="ja">
+GPUが参照する可変長データ列が予め分かっているのであれば、<code>ALTER TABLE ... SET STORAGE</code>によって列の保管モードを指定する事で問題を回避する事ができます。
+保管モード<tt>PLAIN</tt>を指定した場合、圧縮およびTOASTテーブルへの外部格納は行いませんので、必ずGPUで処理する事ができます。しかし、レコード長が（通常8KBである）ページサイズを越えるような長いデータを格納しようとした時にエラーとなる可能性があります。
+保管モード<tt>MAIN</tt>を指定した場合、圧縮およびTOASTテーブルへの外部格納を行う可能性は依然としてありますが、他にレコードを格納する手段が無い時の最終手段としてのみ、圧縮およびTOASTテーブルへの外部格納を行います。
+</span>
+</p>
+
+<p>
+<span lang="en">
+Thus, it is preferable to specify <tt>PLAIN</tt> if you can ensure the maximum length of the variable like <code>varchar(n)</code> data type, or <tt>MAIN</tt> if you cannot deny a string larger than several thousand bytes entirely.
+Even if CPU runs the fallback evaluation, it may be minor if a record per million rows.
+</span>
+<span lang="ja">
+したがって、<code>varchar(n)</code>型など文字列長の上限を保証できる場合は<tt>PLAIN</tt>を、必ずしも数KBの文字列が入力される可能性が排除できない場合は<tt>MAIN</tt>を指定するのがよいでしょう。仮に一部のデータに対してCPUでの再実行が発生したとしても、例えば、100万行に1行の割合であればその影響は軽微と考える事もできます。
+</span>
+</p>
+<pre>
+# ALTER TABLE <i>my_table</i> ALTER <i>varlena_column</i> SET STORAGE main;
+</pre>
+</div>
+</section>
+
+<section class="manual_2" id="reference_functions">
+<h2>
+  <span lang="en">Reference:Functions and Operators</span>
+  <span lang="ja">リファレンス：関数と演算子</span>
+</h2>
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Basic Arithmetic Operators</span>
+<span lang="ja">基本算術演算子</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Operator</span>
+<span lang="ja">演算子</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>smallint + smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint + integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint + bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer + smallint</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer + integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer + bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint + smallint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint + integer</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint + bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real + real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real + float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float + real</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float + float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>numeric + numeric</code></td>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint - smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint - integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint - bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer - smallint</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer - integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer - bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint - smallint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint - integer</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint - bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real - real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real - float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float - real</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float - float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>numeric - numeric</code></td>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint * smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint * integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint * bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer * smallint</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer * integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer * bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint * smallint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint * integer</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint * bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real * real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real * float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float * real</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float * float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>numeric * numeric</code></td>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint / smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint / integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint / bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer / smallint</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer / integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer / bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint / smallint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint / integer</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint / bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real / real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real / float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float / real</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float / float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint % smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer % integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint % bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint & smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">bitwise and</td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer & integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">bitwise and</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint & bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">bitwise and</td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint | smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">bitwise or</td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer | integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">bitwise or</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint | bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">bitwise or</td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint # smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">bitwise xor</td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer # integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">bitwise xor</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint # bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">bitwise xor</td>
+</tr>
+
+<tr>
+<td class="manual"><code>~smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">bitwise not</td>
+</tr>
+
+<tr>
+<td class="manual"><code>~integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">bitwise not</td>
+</tr>
+
+<tr>
+<td class="manual"><code>~bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">bitwise not</td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint &gt;&gt; integer</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">right shift</td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer &gt;&gt; integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">right shift</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint &gt;&gt; integer</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">right shift</td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint &lt;&lt; integer</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">left shift</td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer &lt;&lt; integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">left shift</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint &lt;&lt; integer</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">left shift</td>
+</tr>
+
+<tr>
+<td class="manual"><code>+smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>+integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>+bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>+real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>+float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>+numeric</code></td>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>-smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>-integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>-bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>-real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>-float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>-numeric</code></td>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>@smallint</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>@integer</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>@bigint</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>@real</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>@float</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>@numeric</code></td>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Basic Comparison Operators</span>
+<span lang="ja">基本比較演算子</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Operator</span>
+<span lang="ja">演算子</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>smallint <i>comp</i> smallint</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer <i>comp</i> integer</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint <i>comp</i> bigint</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>real <i>comp</i> real</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>float <i>comp</i> float</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>numeric <i>comp</i> numeric</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+</tbody>
+</table>
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Mathematical Functions</span>
+<span lang="ja">数学関数</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Function</span>
+<span lang="ja">関数</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>abs(smallint)</code></td>
+<td class="manual"><code>smallint</code></td>
+<td class="manual">
+<span lang="en">absolute value</span>
+<span lang="ja">絶対値</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>abs(integer)</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual">
+<span lang="en">absolute value</span>
+<span lang="ja">絶対値</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>abs(bigint)</code></td>
+<td class="manual"><code>bigint</code></td>
+<td class="manual">
+<span lang="en">absolute value</span>
+<span lang="ja">絶対値</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>abs(real)</code></td>
+<td class="manual"><code>real</code></td>
+<td class="manual">
+<span lang="en">absolute value</span>
+<span lang="ja">絶対値</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>abs(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en">absolute value</span>
+<span lang="ja">絶対値</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>cbrt(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">立方根</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dcbrt(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">立方根</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>ceil(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">引数より小さくない最小の整数</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>ceiling(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">引数より小さくない最小の整数</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>exp(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">指数</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dexp(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">指数</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>floor(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">引数より大きくない最大の整数</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>ln(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">自然対数</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dlog1(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">自然対数</span></td>
+</tr>
+
+<tr>
+<td class="manual"><code>log(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">10を底とした対数（常用対数）</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dlog10(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">10を底とした対数（常用対数）</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>pi()</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">円周率</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>power(a float, b float)<code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">aのb乗</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>pow(a float, b float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">aのb乗</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dpow(a float, b float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">aのb乗</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>round(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">四捨五入</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dround(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">四捨五入</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>sign(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">引数の符号（-1, 0, +1）</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>sqrt(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">平方根</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dsqrt(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">平方根</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>trunc(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en">truncate</span>
+<span lang="ja">切り捨て</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>dtrunc(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en">truncate</span>
+<span lang="ja">切り捨て</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>degrees(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">ラジアンに対応する度</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>radians(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">度に対応するラジアン</span></td>
+</td>
+</tr>
+
+<!--
+あれ？PostgreSQLにない
+<tr>
+<td class="manual">acon(float)</td>
+<td class="manual">float</td>
+<td class="manual"></td>
+</tr>
+-->
+
+<tr>
+<td class="manual"><code>asin(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">逆正弦関数</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>atan(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">逆正接関数</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>atan2(x float, y float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">x/yの逆正接関数</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>cos(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">余弦関数</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>cot(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">余接関数</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>sin(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">正弦関数</span></td>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>tan(float)</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual">
+<span lang="en"></span>
+<span lang="ja">正接関数</span>
+</td>
+</td>
+</tr>
+</tbody>
+</table>
+
+
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Date and Time Functions / Operators</span>
+<span lang="ja">日付時刻関数・演算子</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Operator</span>
+<span lang="ja">演算子</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>date + integer</code></td>
+<td class="manual"><code>date</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer + date</code></td>
+<td class="manual"><code>date</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date - integer</code></td>
+<td class="manual"><code>date</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date - date</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date + time</code></td>
+<td class="manual"><code>timestamp</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date + time with timezone</code></td>
+<td class="manual"><code>timestamp with timezone</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time + date</code></td>
+<td class="manual"><code>timestamp</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time - time</code></td>
+<td class="manual"><code>interval</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp - timestamp</code></td>
+<td class="manual"><code>interval</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time with timezone + interval</code></td>
+<td class="manual"><code>time with timezone</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time with timezone - interval</code></td>
+<td class="manual"><code>time with timezone</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone + interval</code></td>
+<td class="manual"><code>timestamp with timezone</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone - interval</code></td>
+<td class="manual"><code>timestamp with timezone</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>- interval</code></td>
+<td class="manual"><code>interval</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>interval + interval</code></td>
+<td class="manual"><code>interval</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>interval - interval</code></td>
+<td class="manual"><code>interval</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date <i>comp</i> date</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>date <i>comp</i> timestamp</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>time <i>comp</i> time</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>time with timezone <i>comp</i> time with timezone</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp <i>comp</i> timestamp</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp <i>comp</i> date</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone <i>comp</i> timestamp with timezone</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>date <i>comp</i> timestamp with timezone</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone <i>comp</i> date</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp <i>comp</i> timestamp with timezone</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone <i>comp</i> timestamp</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>interval <i>comp</i> interval</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>overlap(time, time, time, time)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>overlap(time with timezone, time with timezone, time with timezone, time with timezone)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>overlap(timestamp, timestamp, timestamp, timestamp)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>overlap(timestamp with timezone, timestamp with timezone, timestamp with timezone, timestamp with timezone)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>now()</code></td>
+<td class="manual"><code>timestamp with timezone</code></td>
+<td class="manual"></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Text Functions / Operators</span>
+<span lang="ja">文字列関数・演算子</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Functions / Operators</span>
+<span lang="ja">関数・演算子</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>char(n) <i>comp</i> char(n)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt> or <tt>&lt;&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt> または <tt>&lt;&gt;</tt>。</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>char(n) <i>comp</i> char(n)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>comp</i> is either of <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.
+Valid only when no-locale or C-locale.
+</span>
+<span lang="ja">
+<i>comp</i>は<tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか。
+ロケールなし、またはCロケールの場合のみ有効。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>length(char(n))</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bpcharcmp(char(n), char(n))</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>text <i>comp</i> text</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt> or <tt>&lt;&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt> または <tt>&lt;&gt;</tt>。</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>text <i>comp</i> text</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>comp</i> is either of <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.
+Valid only when no-locale or C-locale.
+</span>
+<span lang="ja">
+<i>comp</i>は<tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか。
+ロケールなし、またはCロケールの場合のみ有効。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>length(text)</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bttextcmp(text, text)</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>string</i> LIKE <i>pattern</i></code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>string</i> is <code>text</code> or <code>char(n)</code> type.
+<i>pattern</i> is <code>text</code> type.
+</span>
+<span lang="ja">
+<i>string</i>は<code>text</code>または<code>char(n)</code>型。
+<i>pattern</i>は<code>text</code>型。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>string</i> NOT LIKE <i>pattern</i></code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>string</i> is <code>text</code> or <code>char(n)</code> type.
+<i>pattern</i> is <code>text</code> type.
+</span>
+<span lang="ja">
+<i>string</i>は<code>text</code>または<code>char(n)</code>型。
+<i>pattern</i>は<code>text</code>型。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>string</i> ILIKE <i>pattern</i></code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>string</i> is <code>text</code> or <code>char(n)</code> type.
+<i>pattern</i> is <code>text</code> type.
+</span>
+<span lang="ja">
+<i>string</i>は<code>text</code>または<code>char(n)</code>型。
+<i>pattern</i>は<code>text</code>型。
+</span>
+<span lang="en">
+Valid only when no-locale or C-locale.
+</span>
+<span lang="ja">
+ロケールなし、またはCロケールの場合のみ有効。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>string</i> NOT ILIKE <i>pattern</i></code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>string</i> is <code>text</code> or <code>char(n)</code> type.
+<i>pattern</i> is <code>text</code> type.
+</span>
+<span lang="ja">
+<i>string</i>は<code>text</code>または<code>char(n)</code>型。
+<i>pattern</i>は<code>text</code>型。
+</span>
+<span lang="en">
+Valid only when no-locale or C-locale.
+</span>
+<span lang="ja">
+ロケールなし、またはCロケールの場合のみ有効。
+</span>
+</td>
+</tr>
+</tbody>
+</table>
+
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Currency Functions / Operators</span>
+<span lang="ja">通貨型関数・演算子</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Functions / Operators</span>
+<span lang="ja">関数・演算子</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tr>
+<td class="manual"><code>money + money</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money - money</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money / money</code></td>
+<td class="manual"><code>float</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money * smallint</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money * integer</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money * real</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money * float</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money / smallint</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money / integer</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money / real</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money / float</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint * money</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer * money</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real * money</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float * money</code></td>
+<td class="manual"><code>money</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>money <i>comp</i> money</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>comp</i> is either of <tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> or <tt>&gt;</tt>.</span>
+<span lang="ja"><i>comp</i>は<tt>=</tt>, <tt>&lt;&gt;</tt>, <tt>&lt;</tt>, <tt>&lt;=</tt>, <tt>&gt;=</tt> または <tt>&gt;</tt>のいずれか</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>cash_cmp(money, money)</code></td>
+<td class="manual"><code>integer</code></td>
+<td class="manual"></td>
+</tr>
+</tbody>
+</table>
+
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Type Cast</span>
+<span lang="ja">型キャスト</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Destination Type</span>
+<span lang="ja">変換先データ型</span>
+</th>
+<th class="manual" style="width: 20em;">
+<span lang="en">Source</span>
+<span lang="ja">変換元データ型</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>integer</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>smallint</code></td>
+<td class="manual"><code>{smallint, integer, bigint, real, float, numeric}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>integer</code></td>
+<td class="manual"><code>{smallint, integer, bigint, real, float, numeric}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>bigint</code></td>
+<td class="manual"><code>{smallint, integer, bigint, real, float, numeric}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>real</code></td>
+<td class="manual"><code>{smallint, integer, bigint, real, float, numeric}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>float</code></td>
+<td class="manual"><code>{smallint, integer, bigint, real, float, numeric}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>numeric</code></td>
+<td class="manual"><code>{smallint, integer, bigint, real, float, numeric}</code></td>
+<td class="manual"></td>
+</tr>
+
+
+<tr>
+<td class="manual"><code>money</code></td>
+<td class="manual"><code>{integer, bigint, numeric}<code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>date</code></td>
+<td class="manual"><code>{date, timestamp, timestamp with timezone}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time</code></td>
+<td class="manual"><code>{time, time with timezone, timestamp, timestamp with timezone}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>time with timezone</code></td>
+<td class="manual"><code>{time, timestamp with timezone}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp</code></td>
+<td class="manual"><code>{date, timestamp with timezone}</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>timestamp with timezone</code></td>
+<td class="manual"><code>{date, timestamp}</code></td>
+<td class="manual"></td>
+</tr>
+
+</tbody>
+</table>
+
+<table class="manual">
+<caption class="manual">
+<span lang="en">Other expression elements</span>
+<span lang="ja">その他の式要素</span>
+</caption>
+<thead class="manual">
+<tr>
+<th class="manual" style="width: 20em;">
+<span lang="en">Expression</span>
+<span lang="ja">式要素</span>
+</th>
+<th class="manual" style="width: 8em;">
+<span lang="en">Return Value</span>
+<span lang="ja">戻り値</span>
+</th>
+<th class="manual" style="max-width: 40%;">
+<span lang="en">Remarks</span>
+<span lang="ja">備考</span>
+</th>
+</tr>
+</thead>
+
+<tbody>
+<tr>
+<td class="manual"><code>COALESCE(<i>value</i>, <i>value</i>, ...)</code></td>
+<td class="manual">
+<span lang="en">type of the <i>value</i></span>
+<span lang="ja"><i>value</i>の型</span>
+</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code>GREATEST(<i>value</i>, <i>value</i>, ...)</code></td>
+<td class="manual">
+<span lang="en">type of the <i>value</i></span>
+<span lang="ja"><i>value</i>の型</span>
+</td>
+<td class="manual">
+<span lang="en">type of the <i>value</i> must have comparison operator.</span>
+<span lang="ja"><i>value</i>のデータ型に大小比較が定義されていなければならない</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code>LEAST(<i>value</i>, <i>value</i>, ...)</code></td>
+<td class="manual">
+<span lang="en">type of the <i>value</i></span>
+<span lang="ja"><i>value</i>の型</span>
+</td>
+<td class="manual">
+<span lang="en">type of the <i>value</i> must have comparison operator.</span>
+<span lang="ja"><i>value</i>のデータ型に大小比較が定義されていなければならない</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>anytype</i> IS NULL</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>anytype</i> is one of the supported data type</span>
+<span lang="ja"><i>anytype</i>はサポートされているデータ型の一つ。</span>
+</td>
+</tr>
+<tr>
+<td class="manual"><code><i>anytype</i> IS NOT NULL</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en"><i>anytype</i> is one of the supported data type</span>
+<span lang="ja"><i>anytype</i>はサポートされているデータ型の一つ。</span>
+</td>
+</tr>
+<tr>
+<td class="manual"><code>boolean IS TRUE</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>boolean IS NOT TRUE</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>boolean IS FALSE</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>boolean IS NOT FALSE</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>boolean IS UNKNOWN</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>boolean IS NOT UNKNOWN</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>NOT boolean</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>AND boolean</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+<tr>
+<td class="manual"><code>OR boolean</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual">
+<code>CASE WHEN <i>cond</i> THEN <i>result</i><br>
+&nbsp;&nbsp;&nbsp;&nbsp;[WHEN <i>cond</i> THEN <i>result</i> ...]<br>
+&nbsp;&nbsp;&nbsp;&nbsp;[ELSE <i>result</i>]<br>
+END</code></td>
+<td class="manual">
+<span lang="en">same with <i>result</i></span>
+<span lang="ja"><i>result</i>と同じ</span>
+</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual">
+<code>CASE <i>expr</i><br>
+&nbsp;&nbsp;&nbsp;&nbsp;WHEN <i>value</i> THEN <i>result</i><br>
+&nbsp;&nbsp;&nbsp;[WHEN <i>value</i> THEN <i>result</i> ...]<br>
+&nbsp;&nbsp;&nbsp;[ELSE <i>result</i>]<br>
+END
+<td class="manual">
+<span lang="en">same with <i>result</i></span>
+<span lang="ja"><i>result</i>と同じ</span>
+</td>
+<td class="manual"></td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>scalar</i> <i>comp</i> ANY (<i>array</i>)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>scalar</i> is a supported data type,
+<i>comp</i> is a supported operator that returns <code>boolean</code>,
+and <i>array</i> is an array consists of supported data types and must be constant value or parameter reference.
+</span>
+<span lang="ja">
+<i>scalar</i>はサポートされているデータ型、
+<i>comp</i>はサポートされている演算子で<code>boolean</code>を返すもの、
+および、<i>array</i>はサポートされているデータ型から成る配列で、定数またはパラメータ参照である事。
+</span>
+</td>
+</tr>
+
+<tr>
+<td class="manual"><code><i>scalar</i> <i>comp</i> ALL (<i>array</i>)</code></td>
+<td class="manual"><code>boolean</code></td>
+<td class="manual">
+<span lang="en">
+<i>scalar</i> is a supported data type,
+<i>comp</i> is a supported operator that returns <code>boolean</code>,
+and <i>array</i> is an array consists of supported data types and must be constant value or parameter reference.
+</span>
+<span lang="ja">
+<i>scalar</i>はサポートされているデータ型、
+<i>comp</i>はサポートされている演算子で<code>boolean</code>を返すもの、
+および、<i>array</i>はサポートされているデータ型から成る配列で、定数またはパラメータ参照である事。
+</span>
+</td>
+</tr>
+
+</tbody>
+</table>
+
+</section>
+
+<section class="manual_2" id="reference_configs">
+<h2>
+  <span lang="en">Reference:Config Options</span>
+  <span lang="ja">リファレンス：設定パラメータ</span>
+</h2>
+
+
+<dt><span>pg_strom.enable_gpuscan</span></dt>
+<dd>
+<p>
+<span lang="en">
+It turns on / off the feature of PG-Strom
+</span>
+<span lang="ja">
+GpuScan機能の有効、無効を切替えます。
+</span>
+</p>
+<p>
+<span lang="en">Default: on</span>
+<span lang="ja">デフォルト: on</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.pullup_outer_scan</span></dt>
+<dd>
+<p>
+<span lang="en">
+When direct child of GpuJoin or GpuPreAgg plan node is full table scan, GpuJoin or GpuPreAgg pull up this full table scan and execute by itself, to reduce overhead of function call or data copy, if this parameter is enabled.
+</span>
+<span lang="ja">
+クエリ実行計画において、GpuJoinやGpuPreAggの直下でテーブルスキャンの実行が計画されている場合、GpuJoinやGpuPreAgg自身がこのスキャン処理を実行する事で、関数呼び出しおよびデータコピーのオーバーヘッドを削減します。
+</span>
+</p>
+<p>
+<span lang="en">Default: On</span>
+<span lang="ja">デフォルト: On</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.program_cache_size</span></dt>
+<dd>
+<p>
+<span lang="en">
+It specifies the amount of pre-built device program cache.
+If you plan to use very various kind of SQL queries, consider larger capacity. On the other hands, this cache is allocated on the shared memory, it is not preferable to acquire than necessity.
+</span>
+<span lang="ja">
+ビルド済みデバイスプログラムを保持するキャッシュの容量を指定します。
+非常に多様な種類のSQLを利用する場合には容量の拡大を検討してください。一方、キャッシュは共有メモリ上に確保されるため、必要以上に確保すべきでもありません。
+</span>
+</p>
+<p>
+<span lang="en">default: 48MB, congurable only when startup</span>
+<span lang="ja">デフォルト: 48MB、起動時のみ設定可能</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.debug_cuda_coredump</span></dt>
+<dd>
+<p>
+<span lang="en">
+If enabled, it tries to collect crash dump when device program performing on GPU device raised error.
+It is internally equivalent to set environment variables <code>CUDA_ENABLE_COREDUMP_ON_EXCEPTION=1</code> and <code>CUDA_ENABLE_CPU_COREDUMP_ON_EXCEPTION=0</code>. On the other hands, it has a known issue; not workable on CUDA7.5, so we don't recommend to use.
+
+</span>
+<span lang="ja">
+GPUで動作するデバイスプログラムがエラーを起こした時に、クラッシュダンプの採取を試みます。
+内部的には、環境変数<code>CUDA_ENABLE_COREDUMP_ON_EXCEPTION=1</code>と<code>CUDA_ENABLE_CPU_COREDUMP_ON_EXCEPTION=0</code>をセットする事と等価です。CUDA 7.5では正しく動作しないという既知問題があるため、使用は推奨されません。
+</span>
+</p>
+<p>
+<span lang="en">Default: off, configurable only when startup</span>
+<span lang="ja">デフォルト: off、起動時のみ設定可能</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.chunk_size</span></dt>
+<dd>
+<p>
+<span lang="en">
+It specifies the unit size when PG-Strom sends/receives data chunks to/from GPU.
+</span>
+<span lang="ja">
+PG-StromがGPUとデータを送受信する際のチャンクサイズを指定します。
+</span>
+</p>
+<p>
+<span lang="en">Default: 15MB</span>
+<span lang="ja">デフォルト: 15MB</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.chunk_limit</span></dt>
+<dd>
+<p>
+<span lang="en">
+It specifies the maximum size when PG-Strom sends/receives data chunks to/from GPU.
+In case when number of input rows is larger than number of output rows like GpuJoin, we may need larger result buffer towards the input up to <code>pg_strom.chunk_size</code>.
+PG-Strom will not expand the result buffer more than <code>pg_strom.chunk_limit</code>, then try to iterate GPU kernel invocation.
+</span>
+<span lang="ja">
+PG-StromがGPUとデータを送受信する際の最大チャンクサイズを指定します。
+GpuJoinのように入力行数よりも出力行数が多い場合、<code>pg_strom.chunk_size</code>の入力に対してより大きな結果バッファが必要な事があります。
+<code>pg_strom.chunk_limit</code>までであれば、PG-Stromは結果バッファを拡大して対応します。それでも不足する場合、GPU kernelの呼び出しを繰り返す事により対応します。
+</span>
+</p>
+<p>
+<span lang="en">Default: <tt>5 * <code>pg_strom.chunk_size</code></tt></span>
+<span lang="ja">デフォルト: <tt>5 * <code>pg_strom.chunk_size</code></tt></span>
+<p>
+</dd>
+
+<dt><span>pg_strom.enabled</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables or disables all the feature of PG-Strom.
+</span>
+<span lang="ja">
+PG-Strom全機能のOn/Offを切替えます。
+</span>
+</p>
+<p>
+<span lang="en">Default: On</span>
+<span lang="ja">デフォルト: On</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.cpu_fallback</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables or disables CPU fallback feature.
+PG-Strom may give up execution of the GPU code depending on the supplied data; too large, externally toasted, ... for example. If CPU fallback is enabled, PG-Strom run the equivalent stuff by CPU, but sequentially.
+CPU fallback ensures the query's executability, but it may also lead unexpected performance degradation. It is a trade-off stuff.
+</span>
+<span lang="ja">
+CPUフォールバック機能のOn/Offを切替えます。
+（例えば、巨大すぎる、外部TOAST表に格納されているなど、）入力データ次第でPG-StromはGPUコードの実行を断念する事があります。
+CPUフォールバックが有効であれば、PG-Stromは同等の処理をCPU上で実行します。しかし、これへ並列実行ではありません。
+CPUフォールバックはクエリを確実に実行可能にしますが、一方で、予測できない性能の低下を招く可能性があり、これはトレードオフです。
+</span>
+<span lang="en">
+NOTE: GPU code may require CPU fallback to raise an appropriate error, like division-by-zero. Please pay attention that disabling CPU fallback may hide actual reason of the error.
+</span>
+<span lang="ja">
+注意：例えばゼロ除算など、CPU側に適切なエラーを発生させる事を目的として、GPU側がCPUフォールバックを要求する事があります。CPUフォールバックを無効化する事で、真のエラー原因が出力されなくなる可能性についても留意してください。
+</span>
+</p>
+<p>
+<span lang="en">Default: On</span>
+<span lang="ja">デフォルト: On</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.perfmon</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables or disables the performance monitor of PG-Strom.
+If the performance monitor is enabled, <code>EXPLAIN ANALYZE</code> prints additional performance information.
+</span>
+<span lang="ja">
+パフォーマンスモニタの有効、無効を切替えます。
+パフォーマンスモニタが有効化されている状態で<code>EXPLAIN ANALYZE</code>を実行すると、追加的な性能情報が出力されます。
+</span>
+</p>
+<p>
+<span lang="en">Default: Off</span>
+<span lang="ja">デフォルト: Off</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.bulkexec</span></dt>
+<dd>
+<p>
+<span lang="en">Obsoleted, has no effect.</span>
+<span lang="ja">廃止予定。特に効果はありません。</span>
+</p>
+<p>
+<span lang="en">Default: Off</span>
+<span lang="ja">デフォルト: Off</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.debug_kernel_source</span></dt>
+<dd>
+<p>
+<span lang="en">
+It writes out the GPU device program generated by PG-Strom.
+If this option is enabled, <code>EXPLAIN VERBOSE</code> prints a path of temporary file that contains the source code.
+
+</span>
+<span lang="ja">
+PG-Stromが自動生成したGPUデバイスプログラムを一時ファイルに書き出します。
+本オプションが有効である状態で<tt>EXPLAIN VERBOSE</tt>を実行すると、ソースコードを含む一時ファイルのパスが出力されます。
+</span>
+</p>
+<p>
+<span lang="en">Default: Off</span>
+<span lang="ja">デフォルト: Off</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.max_async_tasks</span></dt>
+<dd>
+<p>
+<span lang="en">
+It specifies the maximum number of concurrent tasks that shall be executed asynchronously on GPU device.
+</span>
+<span lang="ja">
+GPUに対して非同期に処理を行うデバイスプログラム実行要求の最大多重度を指定します。
+</span>
+</p>
+<p>
+<span lang="en">Default: 32</span>
+<span lang="ja">デフォルト: 32</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.num_threads_margin</span></dt>
+<dd>
+<p>
+<span lang="en">Obsoleted, has no effect</span>
+<span lang="ja">廃止予定。特に効果はありません。</span>
+</p>
+<p>
+<span lang="en">Default: 1.10</span>
+<span lang="ja">デフォルト: 1.10</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.chunk_size_margin</span></dt>
+<dd>
+<p>
+<span lang="en">
+We cannot predicate exact amount of result buffer in some kind of SQL workloads, like tables join for example; we cannot know exact number of result rows except for anomalistic case.
+This option indicates to allocate larger result buffer with specified ratio towards the estimated necessity, to reduce frequency of retry or CPU fallback by lack of result buffer.
+On the other hands, we don't recommend to allocate larger margin than necessity due to over consumption of device memory.
+</span>
+<span lang="ja">
+GPUで処理するSQLワークロードの中には、実際に処理を行うまで結果バッファに必要な大きさが正確には分からないものがあります。例えば、テーブル同士をJOINする場合、例外的な状況を除き、実際にJOINを行わなければ何行が生成されるのか分かりません。
+このオプションは、結果バッファの獲得時に一定の割合のマージンを取る事で、結果バッファの不足に伴う再実行やフォールバック処理の頻度を減らします。
+一方で、無駄に大きなマージンを取る事はデバイスメモリの浪費に繋がるためお勧めできません。
+</span>
+</p>
+<p>
+<span lang="en">Default: 1.25 (25% of margin)</span>
+<span lang="ja">デフォルト: 1.25 (25%のマージン)</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.gpu_setup_cost</span></dt>
+<dd>
+<p>
+<span lang="en">
+A cost parameter when planner estimates the plan executed by GPU. It represents the cost for GPU device initialization and build of device program.
+A larger value of this parameter will prevent applying PG-Strom on smaller tables.
+</span>
+<span lang="ja">
+プラナーがGPU処理のコストを見積もる時に使用するコストパラメータの一つで、GPUデバイスの初期化やデバイスプログラムのビルドに要するコストを表現します。このパラメータを大きな値にするほど、サイズの小さなテーブルに対してPG-Stromが機能しにくくなります。
+</span>
+</p>
+<p>
+<span lang="en">Default: <tt>4000 * <code>DEFAULT_SEQ_PAGE_COST</code></tt></span>
+<span lang="ja">デフォルト: <tt>4000 * <code>DEFAULT_SEQ_PAGE_COST</code></tt></span>
+<p>
+</dd>
+
+<dt><span>pg_strom.gpu_dma_cost</span></dt>
+<dd>
+<p>
+<span lang="en">
+A cost parameter when planner estimates the plan executed by GPU. It represents the cost for DMA transfer of data chunk with <code>pg_strom.chunk_size</code> length.
+</span>
+<span lang="ja">
+プラナーがGPU処理のコストを見積もる時に使用するコストパラメータの一つで、<code>pg_strom.chunk_size</code>分の大きさを持つデータチャンクをGPUデバイスにDMA転送するために必要なコストを表現します。
+</span>
+</p>
+<p>
+<span lang="en">Default: <tt>10 * <code>DEFAULT_SEQ_PAGE_COST</code></tt></span>
+<span lang="ja">デフォルト: <tt>10 * <code>DEFAULT_SEQ_PAGE_COST</code></tt></span>
+<p>
+</dd>
+
+<dt><span>pg_strom.gpu_operator_cost</span></dt>
+<dd>
+<p>
+<span lang="en">
+A cost parameter when planner estimates the plan executed by GPU. It represents the cost to evaluate expression node by GPU.
+A smaller value of this parameter means that computing capability of GPU is better than CPU.
+</span>
+<span lang="ja">
+プラナーがGPU処理のコストを見積もる時に使用するコストパラメータの一つで、GPUデバイスが計算式を処理する際のコストを表現します。この値を小さくするほど、GPUデバイスの計算能力がCPUより優れているという事を意味します。
+</span>
+</p>
+<p>
+<span lang="en">Default: <tt><code>DEFAULT_CPU_OPERATOR_COST</code> / 32</tt></span>
+<span lang="ja">デフォルト: <tt><code>DEFAULT_CPU_OPERATOR_COST</code> / 32</tt></span>
+<p>
+</dd>
+
+<dt><span>pg_strom.gpu_tuple_cost</span></dt>
+<dd>
+<p>
+<span lang="en">Obsoleted, not used now</span>
+<span lang="ja">廃止予定。現在は使われていません</span>
+</p>
+<p>
+<span lang="en">Default: <tt><code>DEFAULT_CPU_TUPLE_COST</code> / 32</tt></span>
+<span lang="ja">デフォルト: <tt><code>DEFAULT_CPU_TUPLE_COST</code> / 32</tt></span>
+<p>
+</dd>
+
+<dt><span>pg_strom.enable_gpusort</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables or disables the feature of GpuSort.
+It is configured to <tt>off</tt> in the default, because of software quality issue at the current version.
+</span>
+<span lang="ja">
+GpuSort機能の有効・無効を切替えます。
+現バージョンのGpuSortは品質が安定していないため、デフォルト<tt>off</tt>に設定されています。
+</span>
+</p>
+<p>
+<span lang="en">Default: Off</span>
+<span lang="ja">デフォルト: Off</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.debug_force_gpusort</span></dt>
+<dd>
+<p>
+<span lang="en">
+A debug option. If enabled, it injects <code>GpuSort</code> into the query execution plan regardless of the estimated cost.
+Don't use this parameter regularly.
+</span>
+<span lang="ja">
+デバッグ用オプションです。推定コスト値に関係なく<tt>GpuSort</tt>をクエリ実行プランに埋め込みます。通常は使用しないでください。
+</span>
+</p>
+<p>
+<span lang="en">Default: Off</span>
+<span lang="ja">デフォルト: Off</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.max_workers</span></dt>
+<dd>
+<p>
+<span lang="en">Obsoleted, not used now</span>
+<span lang="ja">廃止予定。現在は使われていません。</span>
+</span>
+</p>
+<p>
+<span lang="en">Default: max_worker_processes / 2</span>
+<span lang="ja">デフォルト: max_worker_processes / 2</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.enable_gpunestloop</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables and disables GpuNestLoop feature.
+</span>
+<span lang="ja">
+GpuNestLoop機能の有効・無効を切替えます。
+</span>
+</p>
+<p>
+<span lang="en">Default: On</span>
+<span lang="ja">デフォルト: On</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.enable_gpuhashjoin</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables and disables GpuHashJoin feature.
+</span>
+<span lang="ja">
+GpuHashJoin機能の有効・無効を切替えます。
+</span>
+</p>
+<p>
+<span lang="en">Default: On</span>
+<span lang="ja">デフォルト: On</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.enable_gpupreagg</span></dt>
+<dd>
+<p>
+<span lang="en">
+It enables and disables GpuPreAgg feature.
+</span>
+<span lang="ja">
+GpuPreAgg機能の有効・無効を切替えます。
+</span>
+</p>
+<p>
+<span lang="en">Default: On</span>
+<span lang="ja">デフォルト: On</span>
+<p>
+</dd>
+
+<dt><span>pg_strom.debug_force_gpupreagg</span></dt>
+<dd>
+<p>
+<span lang="en">
+A debug option. If enabled, it injects <code>GpuPreAgg</code> into the query execution plan regardless of the estimated cost.
+Don't use this parameter regularly.
+</span>
+<span lang="ja">
+デバッグオプションです。推定コスト値に関係なくGpuPreAgg処理をクエリ実行プランに埋め込みます。
+通常は使用しないでください。
+</span>
+</p>
+<p>
+<span lang="en">Default: Off</span>
+<span lang="ja">デフォルト: Off</span>
+<p>
+</dd>
+
+</dl>
+
+</section>
+</article>
